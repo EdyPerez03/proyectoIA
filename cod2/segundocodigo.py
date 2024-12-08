@@ -7,7 +7,6 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.impute import SimpleImputer
 from sklearn.decomposition import PCA
 from imblearn.over_sampling import SMOTE
-from sklearn.cluster import KMeans
 from statistics import median
 
 datos = pd.read_csv('exoplanets.csv')
@@ -55,55 +54,60 @@ parametros = {
     'min_samples_split': [2, 5, 10]
 }
 
-grid_search = GridSearchCV(
-    estimator=clasificador, param_grid=parametros, cv=3, scoring='f1_weighted', n_jobs=-1
-)
-grid_search.fit(X_entrenamiento, y_entrenamiento)
+num_features = X_entrenamiento.shape[1]
 
-print("Mejores parámetros encontrados:")
-print(grid_search.best_params_)
-print("\nReporte de clasificación:")
-y_pred = grid_search.best_estimator_.predict(X_prueba)
-print(classification_report(y_prueba, y_pred, zero_division=0))
+componentes_optimos = [min(12, num_features), min(10, num_features), min(11, num_features),
+                       min(9, num_features), min(5, num_features), min(3, num_features)]
 
-pca = PCA(n_components=3)
-X_entrenamiento_pca = pca.fit_transform(X_entrenamiento)
-X_prueba_pca = pca.transform(X_prueba)
+f1_scores = {}
 
-clasificador.fit(X_entrenamiento_pca, y_entrenamiento)
-y_pred_pca = clasificador.predict(X_prueba_pca)
+for n_componentes in componentes_optimos:
+    print(f"\nEvaluando con {n_componentes} componentes principales:")
+    pca = PCA(n_components=n_componentes)
+    X_entrenamiento_pca = pca.fit_transform(X_entrenamiento)
+    X_prueba_pca = pca.transform(X_prueba)
 
-print("\nResultados con PCA:")
-print(confusion_matrix(y_prueba, y_pred_pca))
-print(classification_report(y_prueba, y_pred_pca))
-
-kmeans = KMeans(n_clusters=3, random_state=45)
-kmeans.fit(X)
-datos['Cluster'] = kmeans.labels_
-
-caracteristicas_tierra = {
-    "Mass (Tierra)": 1,
-    "Radius (Tierra)": 1,
-    "Period (days)": 365.25,
-    "Semi-major axis (AU)": 1,
-    "Temp. (K)": 288
-}
-
-def calcular_similitud(fila):
-    return np.sqrt(sum((fila[col] - caracteristicas_tierra[col])**2 for col in caracteristicas_tierra))
-
-datos['Similitud'] = datos[columnas_a_escalar].apply(calcular_similitud, axis=1)
-mas_similar = datos.loc[datos['Similitud'].idxmin()]
-print("\nExoplaneta más similar a la Tierra:")
-print(mas_similar)
-
-scores = []
-for _ in range(5):
-    X_entrenamiento, X_prueba, y_entrenamiento, y_prueba = train_test_split(
-        X, y, test_size=0.2, random_state=45, stratify=y
+    grid_search = GridSearchCV(
+        estimator=clasificador, param_grid=parametros, cv=3, scoring='f1_weighted', n_jobs=-1
     )
+    grid_search.fit(X_entrenamiento_pca, y_entrenamiento)
+
+    y_pred_pca = grid_search.best_estimator_.predict(X_prueba_pca)
+    f1_score_pca = f1_score(y_prueba, y_pred_pca, average='weighted')
+    f1_scores[n_componentes] = f1_score_pca
+
+    print("Mejores parámetros encontrados:", grid_search.best_params_)
+    print("\nReporte de clasificación:")
+    print(classification_report(y_prueba, y_pred_pca, zero_division=0))
+
+print("\nF1 scores por cantidad de componentes:")
+for n_componentes, score in f1_scores.items():
+    print(f"Componentes {n_componentes}: F1 score {score:.4f}")
+
+mejor_numero_componentes = max(f1_scores, key=f1_scores.get)
+print(f"\nNúmero óptimo de componentes principales: {mejor_numero_componentes}")
+
+scores_50_50 = []
+
+scores_20_80 = []
+
+for _ in range(100):
+    X_entrenamiento, X_prueba, y_entrenamiento, y_prueba = train_test_split(
+        X, y, test_size=0.5, random_state=np.random.randint(0, 1000), stratify=y
+    )
+    X_entrenamiento, y_entrenamiento = smote.fit_resample(X_entrenamiento, y_entrenamiento)
     clasificador.fit(X_entrenamiento, y_entrenamiento)
     y_pred = clasificador.predict(X_prueba)
-    scores.append(f1_score(y_prueba, y_pred, average='weighted'))
+    scores_50_50.append(f1_score(y_prueba, y_pred, average='weighted'))
 
-print("\nMediana de la confiabilidad:", median(scores))
+for _ in range(100):
+    X_entrenamiento, X_prueba, y_entrenamiento, y_prueba = train_test_split(
+        X, y, test_size=0.2, random_state=np.random.randint(0, 1000), stratify=y
+    )
+    X_entrenamiento, y_entrenamiento = smote.fit_resample(X_entrenamiento, y_entrenamiento)
+    clasificador.fit(X_entrenamiento, y_entrenamiento)
+    y_pred = clasificador.predict(X_prueba)
+    scores_20_80.append(f1_score(y_prueba, y_pred, average='weighted'))
+
+print("\nMediana de la confiabilidad con 100 ejecuciones (50/50 split):", median(scores_50_50))
+print("\nMediana de la confiabilidad con 100 ejecuciones (20/80 split):", median(scores_20_80))
